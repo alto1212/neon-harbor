@@ -1,247 +1,194 @@
-// The story of Neon Harbor: Mara Voss, getaway driver for the Harbor Crew,
-// five jobs for her fixer Lennox, and Viktor Kade's syndicate closing in.
-// Missions are step machines: reach a marker, pick something up, survive, escape.
-import { MONEY, angleTo, dist2 } from './config.js';
-import { createPerson } from './entities.js';
-import { addHeat } from './police.js';
-import { fireBullet } from './combat.js';
+// Five story jobs for getaway driver Mara Voss, handed out by fixer Lennox
+// against Viktor Kade. Each mission is a short chain of stages — go somewhere,
+// pick something up, drive something somewhere, lose the heat — with a
+// payout on the last stage.
+import { MONEY, TUNE } from './config.js';
+import { EVENT_MISSION, makeCar } from './world.js';
+import { addWanted } from './entities.js';
 
 export const MISSIONS = [
   {
-    id: 1, title: 'First Wheels',
-    brief: 'Lennox needs a driver with a car. Any car. Take one and bring it to Neon Paint.',
-    steps: [
-      { type: 'steal', text: 'Steal a car (walk up to one and press E)' },
-      { type: 'goto', at: 'paintShop', text: 'Drive to Neon Paint' },
+    title: 'First Gear', giver: 'Lennox', payout: MONEY.mission[0],
+    brief: 'Lennox needs a driver he can trust. Take his car from the Downtown garage to the Marina drop. 90 seconds.',
+    stages: [
+      { type: 'enter', x: 1460, y: 730, text: 'Get in Lennox’s car at the Downtown garage' },
+      { type: 'deliver', x: 1460, y: 1570, text: 'Drive to the Marina drop-off', time: 90 },
     ],
   },
   {
-    id: 2, title: 'The Pickup',
-    brief: 'Lennox is waiting at Club Mirage. Pick him up and get him to the safehouse. The PD is watching the club tonight.',
-    steps: [
-      { type: 'goto', at: 'nightclub', text: 'Drive to Club Mirage' },
-      { type: 'wait', text: 'Wait for Lennox (stay at the marker)' },
-      { type: 'goto', at: 'safehouse', text: 'Drive Lennox to the safehouse' },
+    title: 'Hot Cargo', giver: 'Lennox', payout: MONEY.mission[1],
+    brief: 'A package is waiting at the Docks. Carry it to the Old Town safehouse — and expect company once you grab it.',
+    stages: [
+      { type: 'channel', x: 2420, y: 450, text: 'Pick up the package at the Docks', channel: 1.5 },
+      { type: 'deliver', x: 500, y: 450, text: 'Deliver the package to the Old Town safehouse' },
     ],
   },
   {
-    id: 3, title: 'Harbor Run',
-    brief: 'A package is waiting at the marina. Bring it to the cargo docks in 150 seconds. Kade\'s men will try to stop you.',
-    steps: [
-      { type: 'goto', at: 'marina', text: 'Pick up the package at the marina', heat: 2 },
-      { type: 'deliver', at: 'docks', time: 150, text: 'Deliver the package to the cargo docks' },
+    title: 'Heat Wave', giver: 'Lennox', payout: MONEY.mission[2],
+    brief: 'A job went loud and the whole Harbor PD is looking for you. Lose the three-star heat — the beach hideout cools things twice as fast.',
+    stages: [
+      { type: 'loseHeat', x: 1600, y: 2280, text: 'Lose the heat — hide out at the beach if you need to' },
     ],
   },
   {
-    id: 4, title: 'The Bank Job',
-    brief: 'Harbor Bank, midday. Walk in, hold the vault, and get out. The syndicate posted guards inside.',
-    steps: [
-      { type: 'goto', at: 'bank', text: 'Get to Harbor Bank (on foot is quieter)' },
-      { type: 'hold', at: 'bank', time: 4, text: 'Hold the vault — stay at the marker', heat: 6 },
-      { type: 'goto', at: 'safehouse', text: 'Escape to the safehouse' },
+    title: 'The Kade Job', giver: 'Lennox', payout: MONEY.mission[3],
+    brief: 'Viktor Kade keeps his gold coupe in Downtown. Steal it and bring it to Lennox’s lockup in Northside. He will send everyone.',
+    stages: [
+      { type: 'enter', x: 1780, y: 730, text: 'Steal Kade’s gold coupe in Downtown' },
+      { type: 'deliver', x: 820, y: 1290, text: 'Deliver the coupe to the Northside lockup' },
     ],
   },
   {
-    id: 5, title: 'The Last Score',
-    brief: 'Kade knows. Meet Lennox at the club, then outrun the whole Harbor PD to the marina boat.',
-    steps: [
-      { type: 'goto', at: 'nightclub', text: 'Meet Lennox at Club Mirage', heat: 10 },
-      { type: 'survive', time: 90, text: 'Survive the chase — 90 seconds' },
-      { type: 'goto', at: 'marina', text: 'Reach the marina boat' },
+    title: 'Harbor Heist', giver: 'Lennox', payout: MONEY.mission[4],
+    brief: 'The Marina casino vault, one quiet walk in, then run. Four stars the moment you touch the cash — get to the boat at the south pier.',
+    stages: [
+      { type: 'channel', x: 1780, y: 1290, text: 'Crack the Marina casino vault', channel: 5 },
+      { type: 'deliver', x: 2600, y: 2290, text: 'Escape to the getaway boat at the south pier' },
     ],
   },
 ];
 
-const PACKAGE_SPOTS = [
-  { x: 300, y: 500 }, { x: 1000, y: 200 }, { x: 2300, y: 400 }, { x: 2750, y: 1200 },
-  { x: 400, y: 1700 }, { x: 1500, y: 2000 }, { x: 2400, y: 1900 }, { x: 900, y: 1100 },
-];
-const HEALTH_SPOTS = [
-  { x: 560, y: 250 }, { x: 1300, y: 500 }, { x: 2200, y: 1500 }, { x: 700, y: 2100 },
-];
-
-export function createMissions() {
-  return {
-    index: 0, active: false, step: 0, timer: 0, holdT: 0, waitT: 0, guardsSpawned: false,
-    enemies: [], packages: PACKAGE_SPOTS.map((p) => ({ ...p, taken: false })),
-    healthKits: HEALTH_SPOTS.map((p) => ({ ...p, taken: false, respawn: 0 })),
-    dialogue: [], objective: 'Free roam — press M for missions',
-  };
+function setStage(state, stage) {
+  const mission = state.mission;
+  mission.stage = stage;
+  const def = MISSIONS[mission.index].stages[stage];
+  mission.waypoint = { x: def.x, y: def.y };
+  mission.text = def.text;
+  mission.timer = def.time || 0;
+  mission.channel = 0;
 }
 
-export function currentMission(m) { return m.index < MISSIONS.length ? MISSIONS[m.index] : null; }
-
-export function startMission(m, g) {
-  const def = currentMission(m);
-  if (!def) return false;
-  m.active = true;
-  m.step = 0;
-  m.timer = 0;
-  m.holdT = 0;
-  m.waitT = 0;
-  m.guardsSpawned = false;
-  m.enemies = [];
-  m.objective = def.steps[0].text;
-  g.addDialogue('LENNOX', def.brief);
-  g.audio.mission();
-  return true;
-}
-
-function markerPos(m, g, step) {
-  if (!step || !step.at) return null;
-  const lm = g.world.landmarks[step.at];
-  return lm ? { x: lm.x, y: lm.y, label: lm.label } : null;
-}
-
-export function missionMarker(m, g) {
-  if (!m.active) return null;
-  const def = currentMission(m);
-  if (!def) return null;
-  return markerPos(m, g, def.steps[m.step]);
-}
-
-function completeStep(m, g) {
-  const def = currentMission(m);
-  const done = def.steps[m.step];
-  m.step += 1;
-  m.holdT = 0;
-  m.waitT = 0;
-  if (done.heat) addHeat(g.police, done.heat);
-  if (m.step >= def.steps.length) {
-    const reward = MONEY.mission[m.index];
-    g.player.money += reward;
-    g.addMessage(`Job done: ${def.title} — ${'$' + reward}`);
-    g.addDialogue('LENNOX', m.index >= MISSIONS.length - 1
-      ? 'That\'s the last of it, Mara. Neon Harbor is yours now. Drive safe.'
-      : 'Clean work, Mara. Come back when you want the next one.');
-    g.audio.mission();
-    g.saveProgress();
-    m.active = false;
-    m.index += 1;
-    m.objective = m.index < MISSIONS.length ? 'Next job: ' + MISSIONS[m.index].title + ' (press M)' : 'Story complete — free roam';
-    return 'completed';
+export function startMission(state, city, random, index) {
+  const def = MISSIONS[index];
+  const mission = state.mission;
+  mission.index = index;
+  mission.active = true;
+  mission.targetCar = null;
+  // Mission cars: a gold coupe waiting where the job says.
+  if (index === 0 || index === 3) {
+    const spot = def.stages[0];
+    const car = makeCar(random, spot.x, spot.y, 0, 'mission');
+    car.color = '#d9a03d';
+    state.cars.push(car);
+    mission.targetCar = car;
   }
-  const next = def.steps[m.step];
-  m.objective = next.text;
-  return 'step';
+  if (index === 2) addWanted(state, 60);
+  setStage(state, 0);
+  state.events |= EVENT_MISSION;
 }
 
-function spawnBankGuards(m, g) {
-  const bank = g.world.landmarks.bank;
-  for (let i = 0; i < 3; i += 1) {
-    const guard = createPerson(bank.x + (i - 1) * 70, bank.y + 60, { hp: 60, armed: true, gang: true });
-    guard.shirt = '#3a3f4a';
-    m.enemies.push(guard);
+export function cancelMission(state) {
+  const mission = state.mission;
+  if (mission.targetCar && mission.targetCar.kind === 'mission') {
+    mission.targetCar.kind = 'parked';
+    mission.targetCar.driver = 'none';
   }
-  g.addDialogue('GUARD', 'Kade owns this bank. You picked the wrong vault.');
+  mission.active = false;
+  mission.index = -1;
+  mission.waypoint = null;
+  mission.text = '';
+  mission.targetCar = null;
 }
 
-export function updateMissions(m, dt, g) {
-  // Hidden cash packages and health kits, in free roam and in missions alike.
-  const px = g.player.x, py = g.player.y;
-  for (const pkg of m.packages) {
-    if (!pkg.taken && dist2(px, py, pkg.x, pkg.y) < 34 * 34) {
-      pkg.taken = true;
-      g.player.money += MONEY.package;
-      g.addMessage(`Found a stash: +$${MONEY.package}`);
-      g.audio.pickup();
-    }
+function completeMission(state) {
+  const mission = state.mission;
+  const def = MISSIONS[mission.index];
+  state.money += def.payout;
+  state.stats.earned += def.payout;
+  state.completed[mission.index] = true;
+  if (mission.targetCar && mission.targetCar.kind === 'mission') {
+    mission.targetCar.kind = 'parked';
+    mission.targetCar.driver = 'none';
   }
-  for (const kit of m.healthKits) {
-    if (kit.taken) {
-      kit.respawn -= dt;
-      if (kit.respawn <= 0) kit.taken = false;
-      continue;
-    }
-    if (dist2(px, py, kit.x, kit.y) < 34 * 34 && g.player.hp < g.player.maxHp) {
-      kit.taken = true;
-      kit.respawn = 60;
-      g.player.hp = Math.min(g.player.maxHp, g.player.hp + 50);
-      g.addMessage('First aid kit: +50 health');
-      g.audio.pickup();
+  state.events |= EVENT_MISSION;
+  mission.active = false;
+  mission.index = -1;
+  mission.waypoint = null;
+  mission.text = 'Job done. Lennox paid you.';
+  mission.targetCar = null;
+}
+
+function failMission(state, text) {
+  const mission = state.mission;
+  if (mission.targetCar && mission.targetCar.kind === 'mission') {
+    mission.targetCar.kind = 'parked';
+    mission.targetCar.driver = 'none';
+  }
+  mission.active = false;
+  mission.index = -1;
+  mission.waypoint = null;
+  mission.text = text;
+  mission.targetCar = null;
+}
+
+export function updateMission(state, city, dt) {
+  const mission = state.mission;
+  if (!mission.active) return;
+  const def = MISSIONS[mission.index];
+  const stage = def.stages[mission.stage];
+  const p = state.player;
+
+  if (mission.timer > 0) {
+    mission.timer -= dt;
+    if (mission.timer <= 0) {
+      failMission(state, 'Too slow — Lennox found someone else.');
+      return;
     }
   }
 
-  // Enemy guards shoot at the player when close.
-  for (let i = m.enemies.length - 1; i >= 0; i -= 1) {
-    const e = m.enemies[i];
-    if (e.hp <= 0) { m.enemies.splice(i, 1); continue; }
-    const d = Math.sqrt(dist2(e.x, e.y, px, py));
-    if (d < 380) {
-      e.angle = angleTo(e.x, e.y, px, py);
-      e.shootT = (e.shootT || 0) - dt;
-      if (e.shootT <= 0) {
-        e.shootT = 1.3;
-        fireBullet(g.combat, e.x, e.y, e.angle + (Math.random() - 0.5) * 0.2, 'enemy', 12);
-        g.audio.shot();
+  if (stage.type === 'goto' || stage.type === 'deliver') {
+    const needCar = mission.targetCar !== null && stage.type === 'deliver';
+    const inCar = needCar ? p.car === mission.targetCar : true;
+    const d = Math.hypot(p.x - stage.x, p.y - stage.y);
+    if (d < 52 && inCar) advance(state, def);
+    return;
+  }
+  if (stage.type === 'enter') {
+    if (mission.targetCar && p.car === mission.targetCar) advance(state, def);
+    return;
+  }
+  if (stage.type === 'channel') {
+    if (!p.onFoot) { mission.channel = 0; return; }
+    const d = Math.hypot(p.x - stage.x, p.y - stage.y);
+    if (d < 52) {
+      mission.channel += dt;
+      if (mission.channel >= stage.channel) {
+        if (mission.index === 1) addWanted(state, 40);
+        if (mission.index === 4) addWanted(state, 80);
+        advance(state, def);
       }
-      // Step toward the player, slowly.
-      e.x += Math.cos(e.angle) * 26 * dt;
-      e.y += Math.sin(e.angle) * 26 * dt;
+    } else {
+      mission.channel = 0;
+    }
+    return;
+  }
+  if (stage.type === 'loseHeat') {
+    // The beach hideout doubles the cooldown.
+    if (state.wanted <= 0) {
+      completeMission(state);
     }
   }
-
-  if (!m.active) return null;
-  const def = currentMission(m);
-  if (!def) return null;
-  const step = def.steps[m.step];
-  const marker = markerPos(m, g, step);
-  const d = marker ? Math.sqrt(dist2(px, py, marker.x, marker.y)) : Infinity;
-
-  if (step.type === 'steal') {
-    if (g.player.inCar) return completeStep(m, g);
-    return null;
-  }
-  if (step.type === 'goto' || step.type === 'deliver') {
-    if (step.time !== undefined) {
-      m.timer += dt;
-      if (m.timer > step.time) {
-        m.active = false;
-        g.addDialogue('LENNOX', 'Too slow, Mara. The job is dead. Come back and we try again.');
-        g.audio.fail();
-        return 'failed';
-      }
-    }
-    if (d < 60) {
-      if (step.type === 'deliver') g.addMessage('Package delivered.');
-      return completeStep(m, g);
-    }
-    return null;
-  }
-  if (step.type === 'wait') {
-    if (d < 70) {
-      m.waitT += dt;
-      if (m.waitT > 2.5) {
-        g.addDialogue('LENNOX', 'In the car, Mara. Drive — and don\'t stop for anyone.');
-        return completeStep(m, g);
-      }
-    } else m.waitT = 0;
-    return null;
-  }
-  if (step.type === 'hold') {
-    if (d < 70 && !g.player.inCar) {
-      m.holdT += dt;
-      if (m.holdT > step.time) {
-        g.addMessage('Vault emptied. Run!');
-        return completeStep(m, g);
-      }
-    } else m.holdT = 0;
-    return null;
-  }
-  if (step.type === 'survive') {
-    m.timer += dt;
-    if (m.timer > step.time) return completeStep(m, g);
-    return null;
-  }
-  return null;
 }
 
-export function beginMissionStep(m, g) {
-  const def = currentMission(m);
-  if (!def || !m.active) return;
-  const step = def.steps[m.step];
-  if (step.type === 'hold' && !m.guardsSpawned) {
-    m.guardsSpawned = true;
-    spawnBankGuards(m, g);
+function advance(state, def) {
+  const mission = state.mission;
+  if (mission.stage + 1 >= def.stages.length) {
+    completeMission(state);
+    return;
   }
+  setStage(state, mission.stage + 1);
+  state.events |= EVENT_MISSION;
+}
+
+export function missionList(state) {
+  return MISSIONS.map((m, i) => ({
+    index: i,
+    title: m.title,
+    giver: m.giver,
+    payout: m.payout,
+    brief: m.brief,
+    done: state.completed[i],
+    available: i === 0 || state.completed[i - 1],
+    active: state.mission.active && state.mission.index === i,
+  }));
 }

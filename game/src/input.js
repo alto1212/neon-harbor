@@ -1,78 +1,85 @@
-// Keyboard and mouse: WASD/arrows to move and drive, E to enter or leave a car,
-// F to punch, mouse to aim and click to shoot, Space to confirm, P or Escape to pause.
+// Keyboard and mouse: WASD/arrows to move and drive, E to enter/exit a car,
+// F to punch, mouse aim + click to shoot, Space handbrake, Shift run,
+// P pause, M jobs, H help, Enter/Space/click confirm on menus.
 export const ACTION_CONFIRM = 1;
 export const ACTION_PAUSE = 2;
-export const ACTION_INTERACT = 4;
-export const ACTION_PUNCH = 8;
-export const ACTION_HORN = 16;
-export const ACTION_MUTE = 32;
-
-const CONFIRM_KEYS = new Set(['Space', 'Enter']);
-const PAUSE_KEYS = new Set(['KeyP', 'Escape']);
-const INTERACT_KEYS = new Set(['KeyE']);
-const PUNCH_KEYS = new Set(['KeyF']);
-const HORN_KEYS = new Set(['KeyH']);
-const MUTE_KEYS = new Set(['KeyM']);
+export const ACTION_JOBS = 4;
+export const ACTION_HELP = 8;
+export const ACTION_ENTER = 16;
+export const ACTION_PUNCH = 32;
 
 export function createInput(canvas) {
   const keys = new Set();
-  const pressed = new Set();
-  const mouse = { x: 0, y: 0, down: false, clicked: false };
-  let held = false;
+  let actions = 0;
+  let mouseX = 0;
+  let mouseY = 0;
+  let mouseDown = false;
+  let mouseClicked = false;
+
+  const KEY_ACTIONS = {
+    Enter: ACTION_CONFIRM,
+    KeyP: ACTION_PAUSE,
+    KeyM: ACTION_JOBS,
+    KeyH: ACTION_HELP,
+    KeyE: ACTION_ENTER,
+    KeyF: ACTION_PUNCH,
+  };
 
   window.addEventListener('keydown', (event) => {
-    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) event.preventDefault();
-    if (!event.repeat) pressed.add(event.code);
+    if (event.repeat) return;
     keys.add(event.code);
+    const action = KEY_ACTIONS[event.code];
+    if (action !== undefined) actions |= action;
+    if (event.code === 'Space') {
+      actions |= ACTION_CONFIRM;
+      event.preventDefault();
+    }
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) event.preventDefault();
   });
   window.addEventListener('keyup', (event) => keys.delete(event.code));
   window.addEventListener('blur', () => keys.clear());
+
   canvas.addEventListener('mousemove', (event) => {
     const rect = canvas.getBoundingClientRect();
-    mouse.x = event.clientX - rect.left;
-    mouse.y = event.clientY - rect.top;
+    mouseX = event.clientX - rect.left;
+    mouseY = event.clientY - rect.top;
   });
   canvas.addEventListener('mousedown', (event) => {
-    if (event.button === 0) { mouse.down = true; mouse.clicked = true; held = true; }
+    if (event.button === 0) {
+      mouseDown = true;
+      mouseClicked = true;
+      actions |= ACTION_CONFIRM;
+    }
   });
-  window.addEventListener('mouseup', () => { mouse.down = false; held = false; });
+  window.addEventListener('mouseup', (event) => {
+    if (event.button === 0) mouseDown = false;
+  });
+  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 
-  function hasAny(set) {
-    for (const key of set) if (pressed.has(key)) return true;
-    return false;
+  function axis(neg, pos) {
+    return (keys.has(pos) ? 1 : 0) - (keys.has(neg) ? 1 : 0);
   }
 
   return {
-    keys, mouse,
-    // Steering and throttle as -1..1, from keys or (when driving) the same keys.
-    drive() {
-      const up = keys.has('KeyW') || keys.has('ArrowUp');
-      const down = keys.has('KeyS') || keys.has('ArrowDown');
-      const left = keys.has('KeyA') || keys.has('ArrowLeft');
-      const right = keys.has('KeyD') || keys.has('ArrowRight');
-      return {
-        throttle: (up ? 1 : 0) - (down ? 1 : 0),
-        steer: (left ? -1 : 0) + (right ? 1 : 0),
-        brake: keys.has('Space') && !held,
-        run: keys.has('ShiftLeft') || keys.has('ShiftRight'),
-      };
-    },
-    walk() {
-      const x = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
-      const y = (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) - (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0);
-      return { x, y, run: keys.has('ShiftLeft') || keys.has('ShiftRight') };
+    // Walking: x = right - left, y = down - up.
+    moveX() { return axis('KeyA', 'KeyD') + axis('ArrowLeft', 'ArrowRight'); },
+    moveY() { return axis('KeyW', 'KeyS') + axis('ArrowUp', 'ArrowDown'); },
+    up() { return keys.has('KeyW') || keys.has('ArrowUp'); },
+    down() { return keys.has('KeyS') || keys.has('ArrowDown'); },
+    left() { return keys.has('KeyA') || keys.has('ArrowLeft'); },
+    right() { return keys.has('KeyD') || keys.has('ArrowRight'); },
+    run() { return keys.has('ShiftLeft') || keys.has('ShiftRight'); },
+    brake() { return keys.has('Space'); },
+    mouse() { return { x: mouseX, y: mouseY, down: mouseDown }; },
+    takeMouseClick() {
+      const clicked = mouseClicked;
+      mouseClicked = false;
+      return clicked;
     },
     takeActions() {
-      let actions = 0;
-      if (hasAny(CONFIRM_KEYS) || mouse.clicked) actions |= ACTION_CONFIRM;
-      if (hasAny(PAUSE_KEYS)) actions |= ACTION_PAUSE;
-      if (hasAny(INTERACT_KEYS)) actions |= ACTION_INTERACT;
-      if (hasAny(PUNCH_KEYS)) actions |= ACTION_PUNCH;
-      if (hasAny(HORN_KEYS)) actions |= ACTION_HORN;
-      if (hasAny(MUTE_KEYS)) actions |= ACTION_MUTE;
-      pressed.clear();
-      mouse.clicked = false;
-      return actions;
+      const taken = actions;
+      actions = 0;
+      return taken;
     },
   };
 }

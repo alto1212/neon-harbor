@@ -1,27 +1,31 @@
-// Save and load: mission progress, money and stats in localStorage.
-export const SAVE_KEY = 'neon-harbor-save-v1';
+// Save game: money, finished missions and collected cash stashes, kept in
+// localStorage so a visit picks up where the last one left off.
+import { SAVE_KEY } from './config.js';
 
-export function hasSave() {
-  try { return window.localStorage.getItem(SAVE_KEY) !== null; } catch { return false; }
-}
-
-export function saveGame(data) {
-  try {
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify({ ...data, savedAt: Date.now() }));
-    return true;
-  } catch { return false; }
-}
-
-export function loadGame() {
+export function loadSave() {
   try {
     const raw = window.localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
-    if (typeof data !== 'object' || data === null) return null;
-    return data;
-  } catch { return null; }
+    if (!data || typeof data.money !== 'number') return null;
+    return {
+      money: data.money | 0,
+      completed: Array.isArray(data.completed) ? data.completed.map(Boolean) : [false, false, false, false, false],
+      stashes: Array.isArray(data.stashes) ? data.stashes.map(Boolean) : [],
+    };
+  } catch {
+    return null;
+  }
 }
 
-export function clearSave() {
-  try { window.localStorage.removeItem(SAVE_KEY); } catch { /* storage unavailable */ }
+export function saveGame(state) {
+  try {
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+      money: state.money | 0,
+      completed: state.completed,
+      stashes: state.stashes.map((s) => s.taken),
+    }));
+  } catch {
+    // Storage can be off: the game then lasts this visit only.
+  }
 }
